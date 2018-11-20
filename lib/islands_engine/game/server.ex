@@ -4,28 +4,38 @@ defmodule IslandsEngine.Game.Server do
   
   @timeout 60 * 60 * 14 * 1000
   
-  def start_link(name) when is_binary(name), do: 
+  def start_link(name) when is_binary(name) do 
     GenServer.start_link(__MODULE__, name, name: via_tuple(name))
+  end
   
   def init(name) do
-    player1 = %{name: name, board: Board.new(), guesses: Guesses.new()}
-    player2 = %{name: nil,  board: Board.new(), guesses: Guesses.new()}
-    {:ok, %{player1: player1, player2: player2, rules: %Rules{}}, @timeout}
+    send(self(), {:set_state, name})
+    {:ok, fresh_state(name)}
+  end
+  
+  def handle_info({:set_state, name}, _state) do
+    state = 
+      case :ets.lookup(:game_state, name) do
+        [] -> fresh_state(name)
+        [{_key, saved_state}] -> saved_state
+      end
+    :ets.insert(:game_state, {name, state})
+    {:ok, state, @timeout}    
   end
   
   def handle_info(:timeout, state) do
     {:stop, {:shutdown, :timeout}, state}
   end
   
-  def handle_call({:add_player, name}, _from, state_data) do
-    with {:ok, rules} <- Rules.check(state_data.rules, :add_player)
+  def handle_call({:add_player, name}, _from, state) do
+    with {:ok, rules} <- Rules.check(state.rules, :add_player)
     do
-      state_data
+      state
       |> update_player2_name(name)
       |> update_rules(rules)
       |> reply_success(:ok)
     else
-      :error -> {:reply, :error, state_data}
+      :error -> {:reply, :error, state}
     end
   end
   
@@ -80,14 +90,20 @@ defmodule IslandsEngine.Game.Server do
     end
   end
   
+  def terminate({:shutdown, :timeout}, state) do
+    :ets.delete(:game_state, state.player1.name)
+    :ok
+  end
+  def terminate(_reason, _state), do: :ok
+  
   def pid_from_name(name) do
     name
     |> via_tuple()
     |> GenServer.whereis()
   end
   
-  defp update_player2_name(state_data, name), do: put_in(state_data.player2.name, name)
-  defp update_rules(state_data, rules), do: %{state_data | rules: rules}
+  defp update_player2_name(state, name), do: put_in(state.player2.name, name)
+  defp update_rules(state, rules), do: %{state | rules: rules}
   defp update_board(state, player, board), do: Map.update!(state, player, fn player -> %{player | board: board} end)
   defp update_guesses(state, player, hit_or_miss, coordinate) do
     update_in(state[player].guesses, fn guesses ->
@@ -95,11 +111,20 @@ defmodule IslandsEngine.Game.Server do
     end)
   end
   
-  defp reply_success(state_data, reply), do: {:reply, reply, state_data, @timeout}
+  defp reply_success(state, reply) do
+    :ets.insert(:game_state, {state.player1.name, state})
+    {:reply, reply, state, @timeout}
+  end
 
   defp player_board(state, player), do: Map.get(state, player).board  
   defp opponent(:player1), do: :player2
   defp opponent(:player2), do: :player1
+  
+  defp fresh_state(name) do
+    player1 = %{name: name, board: Board.new(), guesses: Guesses.new()}
+    player2 = %{name: nil,  board: Board.new(), guesses: Guesses.new()}
+    %{player1: player1, player2: player2, rules: %Rules{}}
+  end
   
   defp via_tuple(name), do: {:via, Registry, {Registry.Game, name}}
 end

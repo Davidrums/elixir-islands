@@ -1,13 +1,14 @@
 defmodule IslandsEngine.Game do
-  alias __MODULE__
   alias IslandsEngine.Game.Server
   @players [:player1, :player2]
   
   def start_game(name), do: 
     Supervisor.start_child(IslandsEngine.Game.Supervisor, [name])
     
-  def stop_game(name), do: 
+  def stop_game(name) do 
+    :ets.delete(:game_state, name)
     Supervisor.terminate_child(IslandsEngine.Game.Supervisor, Server.pid_from_name(name))
+  end
   
   def add_player(game, name) when is_binary(name), do: 
     GenServer.call(game, {:add_player, name})
